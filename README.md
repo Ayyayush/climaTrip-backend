@@ -383,7 +383,7 @@ Create a `.env` file.
 Example:
 
 ```env
-PORT=8080
+PORT=3001
 
 MONGODB_URI=your_mongodb_connection
 

@@ -4,9 +4,54 @@ const jwt = require("jsonwebtoken");
 
 const register = async (req, res) => {
     try {
-        const { name, email, password } = req.body;
 
-        const existingUser = await User.findOne({ email });
+        let {
+            name,
+            email,
+            password,
+            profilePicture
+        } = req.body;
+
+        name = name?.trim();
+        email = email?.trim().toLowerCase();
+
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required"
+            });
+        }
+
+        if (name.length < 3) {
+            return res.status(400).json({
+                success: false,
+                message: "Name must be at least 3 characters"
+            });
+        }
+
+        const emailRegex =
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid email format"
+            });
+        }
+
+        const passwordRegex =
+            /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,}$/;
+
+        if (!passwordRegex.test(password)) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Password must contain uppercase, lowercase, number and special character"
+            });
+        }
+
+        const existingUser =
+            await User.findOne({ email });
 
         if (existingUser) {
             return res.status(400).json({
@@ -15,34 +60,58 @@ const register = async (req, res) => {
             });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword =
+            await bcrypt.hash(password, 10);
 
         const user = await User.create({
             name,
             email,
-            password: hashedPassword
+            password: hashedPassword,
+            profilePicture
         });
 
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
             message: "User registered successfully",
-            user
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                profilePicture: user.profilePicture
+            }
         });
+
     }
     catch (error) {
-        res.status(500).json({
+
+        return res.status(500).json({
             success: false,
             message: error.message
         });
+
     }
 };
 
-
 const login = async (req, res) => {
-    try {
-        const { email, password } = req.body;
 
-        const user = await User.findOne({ email });
+    try {
+
+        let {
+            email,
+            password
+        } = req.body;
+
+        email = email?.trim().toLowerCase();
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email and Password are required"
+            });
+        }
+
+        const user =
+            await User.findOne({ email });
 
         if (!user) {
             return res.status(400).json({
@@ -51,10 +120,11 @@ const login = async (req, res) => {
             });
         }
 
-        const isMatch = await bcrypt.compare(
-            password,
-            user.password
-        );
+        const isMatch =
+            await bcrypt.compare(
+                password,
+                user.password
+            );
 
         if (!isMatch) {
             return res.status(400).json({
@@ -79,15 +149,19 @@ const login = async (req, res) => {
             user: {
                 id: user._id,
                 name: user.name,
-                email: user.email
+                email: user.email,
+                profilePicture: user.profilePicture
             }
         });
 
-    } catch (error) {
+    }
+    catch (error) {
+
         return res.status(500).json({
             success: false,
             message: error.message
         });
+
     }
 };
 
