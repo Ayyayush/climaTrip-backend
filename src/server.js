@@ -14,7 +14,26 @@ const app = express();
 
 connectDB();
 
-app.use(cors());
+// ============================
+// CORS Configuration
+// ============================
+app.use(
+    cors({
+        origin: true,
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: [
+            "Origin",
+            "X-Requested-With",
+            "Content-Type",
+            "Accept",
+            "Authorization"
+        ]
+    })
+);
+
+
+
 app.use(express.json());
 
 app.use("/api/auth", authRoutes);
@@ -23,7 +42,7 @@ app.use("/api", travelRoutes);
 app.use("/api/chat", chatRoutes);
 
 app.get("/", (req, res) => {
-    res.json({
+    res.status(200).json({
         success: true,
         message: "BeachTravel Backend Running"
     });
@@ -32,5 +51,5 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`✅ Server running on port ${PORT}`);
 });
