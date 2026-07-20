@@ -1,38 +1,28 @@
 const jwt = require("jsonwebtoken");
+const { env } = require("../config/env");
+const AppError = require("../utils/AppError");
 
-const authMiddleware = async (req, res, next) => {
+const authMiddleware = (req, res, next) => {
     try {
-
         const authHeader = req.header("Authorization");
 
         if (!authHeader) {
-            return res.status(401).json({
-                success: false,
-                message: "No token found"
-            });
+            throw new AppError("No token found", 401);
         }
 
-        const token = authHeader.startsWith("Bearer ")
-            ? authHeader.split(" ")[1]
-            : authHeader;
+        const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : authHeader;
 
-        const decoded = jwt.verify(
-            token,
-            process.env.JWT_SECRET
-        );
+        const decoded = jwt.verify(token, env.jwtSecret);
 
         req.user = decoded;
 
         next();
-
-    }
-    catch (error) {
-
-        return res.status(401).json({
-            success: false,
-            message: "Invalid Token"
-        });
-
+    } catch (error) {
+        if (error instanceof AppError) {
+            return next(error);
+        }
+        // jwt.verify throws its own error types (TokenExpiredError, JsonWebTokenError)
+        return next(new AppError("Invalid or expired token", 401));
     }
 };
 

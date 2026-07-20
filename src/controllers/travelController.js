@@ -1,50 +1,19 @@
-const { generateItinerary } = require("../services/groqService");
+const { generateAndSaveTravelPlan } = require("../services/travelService");
+const asyncHandler = require("../utils/asyncHandler");
 
-const generateTravelPlan = async (req, res) => {
-    try {
+const generateTravelPlan = asyncHandler(async (req, res) => {
+    const { source, destination, startDate, endDate } = req.body;
 
-        const {
-            source,
-            destination,
-            startDate,
-            endDate
-        } = req.body;
+    const travelPlan = await generateAndSaveTravelPlan({
+        userId: req.user?.id,
+        source,
+        destination,
+        startDate,
+        endDate,
+    });
 
-        const aiResponse = await generateItinerary(
-            source,
-            destination,
-            startDate,
-            endDate
-        );
+    // Response shape is unchanged: the raw plan object, exactly as before.
+    return res.status(200).json(travelPlan);
+});
 
-        const cleanedResponse = aiResponse
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim();
-
-        const travelPlan = JSON.parse(cleanedResponse);
-        
-       console.log(
-    JSON.stringify(
-        travelPlan.day_wise_itinerary,
-        null,
-        2
-    )
-);
-
-        return res.status(200).json(travelPlan);
-
-    } catch (error) {
-
-        console.error("Generate Travel Plan Error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Failed to Generate Travel Plan"
-        });
-    }
-};
-
-module.exports = {
-    generateTravelPlan
-};
+module.exports = { generateTravelPlan };

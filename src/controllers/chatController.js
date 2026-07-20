@@ -1,41 +1,12 @@
-const { getChatResponse } = require("../services/chatService");
+const { getChatResponse } = require("../ai/chains/chatChain");
+const asyncHandler = require("../utils/asyncHandler");
 
-const chatWithAI = async (req, res) => {
+const chatWithAI = asyncHandler(async (req, res) => {
+    const { message } = req.body;
 
-    try {
+    const response = await getChatResponse(message, req.user?.id);
 
-        const { message } = req.body;
+    return res.status(200).json({ success: true, response });
+});
 
-        if (!message) {
-
-            return res.status(400).json({
-                success: false,
-                message: "Message is required"
-            });
-
-        }
-
-        const response = await getChatResponse(message);
-
-        return res.status(200).json({
-            success: true,
-            response
-        });
-
-    }
-    catch (error) {
-
-        console.log(error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Failed to generate response"
-        });
-
-    }
-
-};
-
-module.exports = {
-    chatWithAI
-};
+module.exports = { chatWithAI };

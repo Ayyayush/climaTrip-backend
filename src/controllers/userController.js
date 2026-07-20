@@ -1,32 +1,15 @@
-const User = require("../models/User");
+const asyncHandler = require("../utils/asyncHandler");
+const AppError = require("../utils/AppError");
+const userRepository = require("../repositories/userRepository");
 
-const getProfile = async (req, res) => {
-    try
-    {
-        const user = await User.findById(req.user.id).select("-password");
+const getProfile = asyncHandler(async (req, res) => {
+    const user = await userRepository.findById(req.user.id);
 
-        if(!user)
-        {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            user
-        });
+    if (!user) {
+        throw new AppError("User not found", 404);
     }
-    catch(error)
-    {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
 
-module.exports = {
-    getProfile
-};
+    res.status(200).json({ success: true, user });
+});
+
+module.exports = { getProfile };

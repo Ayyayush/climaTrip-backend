@@ -1,14 +1,21 @@
 const mongoose = require("mongoose");
+const { env } = require("./env");
+const logger = require("../utils/logger");
 
 const connectDB = async () => {
     try {
-        await mongoose.connect(process.env.MONGO_URI);
+        mongoose.connection.on("error", (err) => {
+            logger.error("MongoDB connection error", { error: err.message });
+        });
+        mongoose.connection.on("disconnected", () => {
+            logger.warn("MongoDB disconnected");
+        });
 
-        console.log("MongoDB Connected");
-    }
-    catch(error)
-    {
-        console.log("MongoDB Connection Error:", error.message);
+        await mongoose.connect(env.mongoUri);
+
+        logger.info("MongoDB Connected");
+    } catch (error) {
+        logger.error("MongoDB Connection Error", { error: error.message });
         process.exit(1);
     }
 };
