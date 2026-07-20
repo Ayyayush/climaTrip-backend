@@ -6,7 +6,7 @@ const compression = require("compression");
 const hpp = require("hpp");
 const morgan = require("morgan");
 const mongoose = require("mongoose");
-const chatRoutes = require("./routes/chatRoutes");
+
 dotenv.config();
 
 const { env, validateEnv } = require("./config/env");
@@ -22,17 +22,17 @@ const {
 } = require("./middleware/errorHandler");
 const { register, metricsMiddleware } = require("./config/metrics");
 
+// ============================
+// Routes
+// ============================
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const travelRoutes = require("./routes/travelRoutes");
-
-// IMPORTANT:
-// Uncomment ONLY if src/routes/chatRoutes.js actually exists.
-// const chatRoutes = require("./routes/chatRoutes");
+const chatRoutes = require("./routes/chatRoutes");
 
 const app = express();
 
-// Behind reverse proxy / Nginx / load balancer
+// Behind reverse proxy / load balancer (Render)
 app.set("trust proxy", 1);
 
 // ============================
@@ -98,6 +98,7 @@ app.use(cors(corsOptions));
 // Body Parsing
 // ============================
 app.use(express.json({ limit: "1mb" }));
+
 app.use(
     express.urlencoded({
         extended: true,
@@ -105,7 +106,9 @@ app.use(
     })
 );
 
-// Input sanitization
+// ============================
+// Input Sanitization
+// ============================
 app.use(sanitizeInput);
 
 // ============================
@@ -134,21 +137,21 @@ connectDB();
 // Health Endpoints
 // ============================
 app.get("/", (req, res) => {
-    res.status(200).json({
+    return res.status(200).json({
         success: true,
         message: "BeachTravel Backend Running",
     });
 });
 
 app.get("/health", (req, res) => {
-    res.status(200).json({
+    return res.status(200).json({
         success: true,
         status: "ok",
     });
 });
 
 app.get("/health/live", (req, res) => {
-    res.status(200).json({
+    return res.status(200).json({
         success: true,
         status: "alive",
     });
@@ -191,15 +194,13 @@ app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api", travelRoutes);
 
-// IMPORTANT:
-// If chatRoutes.js is a separate router, use:
-// app.use("/api/chat", chatRoutes);
-//
-// If POST /api/chat is already defined inside travelRoutes,
-// DO NOT mount another chat router.
-
+// TripGenie AI Chat
+// chatRoutes.js defines router.post("/"), therefore this creates:
+// POST /api/chat
+app.use("/api/chat", chatRoutes);
 // ============================
 // 404 & Centralized Error Handler
+// Must remain AFTER all routes
 // ============================
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -254,6 +255,7 @@ const shutdown = async (signal) => {
             mongoose.connection.readyState !== 0
                 ? mongoose.connection.close(false)
                 : Promise.resolve(),
+
             typeof responseCache.close === "function"
                 ? responseCache.close()
                 : Promise.resolve(),
@@ -274,6 +276,9 @@ const shutdown = async (signal) => {
     }
 };
 
+// ============================
+// Shutdown Signals
+// ============================
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
@@ -295,4 +300,5 @@ process.on("uncaughtException", (error) => {
     process.exit(1);
 });
 
+// Export app for testing
 module.exports = app;
