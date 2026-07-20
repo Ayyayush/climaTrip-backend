@@ -6,7 +6,7 @@ const compression = require("compression");
 const hpp = require("hpp");
 const morgan = require("morgan");
 const mongoose = require("mongoose");
-
+const chatRoutes = require("./routes/chatRoutes");
 dotenv.config();
 
 const { env, validateEnv } = require("./config/env");

@@ -281,3 +281,504 @@ async function runTravelGraph({ source, destination, startDate, endDate, prefere
 }
 
 module.exports = { runTravelGraph, compiledGraph };
+// ============================================================
+// Merge specialist-agent outputs
+// ============================================================
+
+async function mergeNode(state) {
+    const notes = state.agentNotes || {};
+
+    const merged = Object.entries(notes)
+        .map(([agent, note]) => {
+            if (!note || typeof note !== "object") {
+                return `${agent}: No usable notes available.`;
+            }
+
+            const summary =
+                typeof note.summary === "string"
+                    ? note.summary
+                    : "No summary available.";
+
+            const keyPoints = Array.isArray(note.keyPoints)
+                ? note.keyPoints
+                : [];
+
+            const pointsText =
+                keyPoints.length > 0
+                    ? keyPoints.join("; ")
+                    : "No additional key points.";
+
+            return `${agent}: ${summary} (${pointsText})`;
+        })
+        .join("\n");
+
+    return {
+        mergedContext:
+            merged || "No specialist agent context is available.",
+    };
+}
+
+// ============================================================
+// Final itinerary generation
+// ============================================================
+
+async function generateItineraryNode(state) {
+    const formatInstructions =
+        travelPlanParser.getFormatInstructions();
+
+    const finalLLM = createLLM({
+        temperature: 0.4,
+        maxTokens: 1800,
+    });
+
+    try {
+        /*
+         * travelPlannerPrompt should contain only static placeholders.
+         *
+         * IMPORTANT:
+         * JSON/tool data is passed here as placeholder VALUES.
+         * Never dynamically construct a ChatPromptTemplate containing
+         * JSON strings because { } may be interpreted as template variables.
+         */
+        const chain = travelPlannerPrompt.pipe(finalLLM);
+
+        const raw = await withRetry(
+            () =>
+                chain.invoke({
+                    source: String(state.source || ""),
+                    destination: String(
+                        state.destination || ""
+                    ),
+                    startDate: String(
+                        state.startDate || ""
+                    ),
+                    endDate: String(
+                        state.endDate || ""
+                    ),
+                    preferences: String(
+                        state.preferences ||
+                            "none known yet"
+                    ),
+
+                    ragContext: String(
+                        state.ragContext ||
+                            "No additional retrieved travel knowledge available."
+                    ),
+
+                    toolResults: JSON.stringify(
+                        state.toolResults || {},
+                        null,
+                        2
+                    ),
+
+                    agentNotes: String(
+                        state.mergedContext ||
+                            "No specialist agent notes available."
+                    ),
+
+                    format_instructions:
+                        formatInstructions,
+                }),
+            {
+                retries: 2,
+                label: "final itinerary generation",
+            }
+        );
+
+        const text =
+            typeof raw.content === "string"
+                ? raw.content
+                : String(raw.content || "");
+
+        const cleaned = text
+            .replace(/```json/gi, "")
+            .replace(/```/g, "")
+            .trim();
+
+        if (!cleaned) {
+            throw new Error(
+                "Final itinerary generation returned an empty response"
+            );
+        }
+
+        let parsed;
+
+        try {
+            // Primary structured-output parsing.
+            parsed =
+                await travelPlanParser.parse(cleaned);
+        } catch (parseError) {
+            logger.warn(
+                "Itinerary output failed schema validation, attempting repair",
+                {
+                    error: parseError.message,
+                }
+            );
+
+            /*
+             * Repair is deliberately performed using a direct LLM call,
+             * not ChatPromptTemplate.fromTemplate().
+             *
+             * formatInstructions and cleaned output may contain JSON braces.
+             * Passing them directly to the model avoids LangChain treating
+             * those braces as template variables.
+             */
+            const repairLLM = createLLM({
+                temperature: 0,
+                maxTokens: 1800,
+            });
+
+            const repairPrompt = [
+                "You are a JSON repair assistant.",
+                "",
+                "The following AI-generated travel plan must be converted into valid JSON.",
+                "",
+                "The JSON must satisfy these structured-output requirements:",
+                "",
+                formatInstructions,
+                "",
+                "Broken output:",
+                "",
+                cleaned,
+                "",
+                "Rules:",
+                "1. Return ONLY valid JSON.",
+                "2. Do not use Markdown.",
+                "3. Do not include ```json code fences.",
+                "4. Do not include explanations.",
+                "5. Preserve useful information from the original output.",
+                "6. Ensure all required fields are present.",
+                "7. Ensure numeric budget and transport cost fields are numbers.",
+            ].join("\n");
+
+            const repaired =
+                await repairLLM.invoke(repairPrompt);
+
+            const repairedText =
+                typeof repaired.content === "string"
+                    ? repaired.content
+                    : String(
+                          repaired.content || ""
+                      );
+
+            const repairedCleaned =
+                repairedText
+                    .replace(/```json/gi, "")
+                    .replace(/```/g, "")
+                    .trim();
+
+            if (!repairedCleaned) {
+                throw new Error(
+                    "Itinerary repair returned an empty response"
+                );
+            }
+
+            let repairedJSON;
+
+            try {
+                repairedJSON =
+                    JSON.parse(repairedCleaned);
+            } catch (jsonError) {
+                logger.error(
+                    "Repaired itinerary is still invalid JSON",
+                    {
+                        error: jsonError.message,
+                    }
+                );
+
+                throw new Error(
+                    "AI generated an invalid travel plan response"
+                );
+            }
+
+            // Final Zod validation.
+            parsed =
+                travelPlanSchema.parse(
+                    repairedJSON
+                );
+        }
+
+        return {
+            finalPlan: parsed,
+        };
+    } catch (error) {
+        logger.error(
+            "Final itinerary generation failed",
+            {
+                error: error.message,
+                destination:
+                    state.destination,
+            }
+        );
+
+        throw error;
+    }
+}
+
+// ============================================================
+// LangGraph workflow wiring
+// ============================================================
+
+const graph = new StateGraph(TravelState)
+    .addNode(
+        "planner",
+        plannerNode
+    )
+    .addNode(
+        "weather",
+        weatherNode
+    )
+    .addNode(
+        "budget",
+        budgetNode
+    )
+    .addNode(
+        "transport",
+        transportNode
+    )
+    .addNode(
+        "hotel",
+        hotelNode
+    )
+    .addNode(
+        "restaurant",
+        restaurantNode
+    )
+    .addNode(
+        "safety",
+        safetyNode
+    )
+    .addNode(
+        "merge",
+        mergeNode
+    )
+    .addNode(
+        "generateItinerary",
+        generateItineraryNode
+    )
+
+    // Entry point
+    .addEdge(
+        START,
+        "planner"
+    )
+
+    // ========================================================
+    // Fan-out
+    // ========================================================
+
+    .addEdge(
+        "planner",
+        "weather"
+    )
+    .addEdge(
+        "planner",
+        "budget"
+    )
+    .addEdge(
+        "planner",
+        "transport"
+    )
+    .addEdge(
+        "planner",
+        "hotel"
+    )
+    .addEdge(
+        "planner",
+        "restaurant"
+    )
+    .addEdge(
+        "planner",
+        "safety"
+    )
+
+    // ========================================================
+    // Fan-in
+    // ========================================================
+
+    .addEdge(
+        "weather",
+        "merge"
+    )
+    .addEdge(
+        "budget",
+        "merge"
+    )
+    .addEdge(
+        "transport",
+        "merge"
+    )
+    .addEdge(
+        "hotel",
+        "merge"
+    )
+    .addEdge(
+        "restaurant",
+        "merge"
+    )
+    .addEdge(
+        "safety",
+        "merge"
+    )
+
+    // Final structured itinerary
+    .addEdge(
+        "merge",
+        "generateItinerary"
+    )
+
+    .addEdge(
+        "generateItinerary",
+        END
+    );
+
+const compiledGraph =
+    graph.compile();
+
+// ============================================================
+// Public graph runner
+// ============================================================
+
+/**
+ * Runs the complete AI travel-planning pipeline.
+ *
+ * Flow:
+ *
+ * Input
+ *   ↓
+ * RAG retrieval
+ *   ↓
+ * Planner
+ *   ↓
+ * Parallel specialist agents
+ *   ↓
+ * Merge
+ *   ↓
+ * Structured itinerary generation
+ *   ↓
+ * Zod validation
+ *   ↓
+ * TravelPlan-compatible JSON
+ */
+async function runTravelGraph({
+    source,
+    destination,
+    startDate,
+    endDate,
+    preferences,
+}) {
+    if (!source) {
+        throw new Error(
+            "Trip source is required"
+        );
+    }
+
+    if (!destination) {
+        throw new Error(
+            "Trip destination is required"
+        );
+    }
+
+    if (!startDate) {
+        throw new Error(
+            "Trip start date is required"
+        );
+    }
+
+    if (!endDate) {
+        throw new Error(
+            "Trip end date is required"
+        );
+    }
+
+    // ========================================================
+    // RAG retrieval
+    // ========================================================
+
+    let ragContext =
+        "No additional retrieved travel knowledge available.";
+
+    try {
+        ragContext =
+            await retrieveContext(
+                [
+                    destination,
+                    "travel guide",
+                    "local safety",
+                    "weather",
+                    "packing",
+                    "transport",
+                    "culture",
+                ].join(" ")
+            );
+    } catch (error) {
+        /*
+         * RAG is an enhancement, not a hard dependency.
+         *
+         * If ChromaDB is unavailable, trip generation should continue
+         * through the LangGraph workflow without retrieved context.
+         */
+        logger.warn(
+            "RAG retrieval unavailable; continuing without retrieved context",
+            {
+                error: error.message,
+                destination,
+            }
+        );
+    }
+
+    // ========================================================
+    // Execute LangGraph
+    // ========================================================
+
+    const result =
+        await compiledGraph.invoke({
+            source,
+            destination,
+            startDate,
+            endDate,
+
+            preferences:
+                preferences ||
+                "none known yet",
+
+            ragContext,
+
+            toolResults: {},
+
+            agentNotes: {},
+        });
+
+    // ========================================================
+    // Defensive output validation
+    // ========================================================
+
+    if (!result) {
+        throw new Error(
+            "Travel graph returned no result"
+        );
+    }
+
+    if (!result.finalPlan) {
+        throw new Error(
+            "Travel graph completed without generating a final itinerary"
+        );
+    }
+
+    /*
+     * Validate once more before returning data to the controller.
+     * This protects TravelPlan.jsx from receiving missing arrays/objects
+     * that could cause `.map()` runtime errors.
+     */
+    const validatedPlan =
+        travelPlanSchema.parse(
+            result.finalPlan
+        );
+
+    return validatedPlan;
+}
+
+module.exports = {
+    runTravelGraph,
+    compiledGraph,
+};
